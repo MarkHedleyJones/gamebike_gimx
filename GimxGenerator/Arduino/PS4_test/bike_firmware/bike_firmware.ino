@@ -43,8 +43,9 @@ uint8_t buffer_out_len = 0;
 uint8_t buffer_out_flag = 0;
 uint8_t buffer_out_micros = 0;
 
+
 unsigned long last_report_tx;
-unsigned long micros_adjust;
+unsigned long last_report_sent_micros;
 // extern volatile unsigned long timer0_millis;
 uint8_t byte_in;
 uint8_t head_chall[6] = {0xf0, 0x03, 0x00, 0x00, 0x40, 0x00};
@@ -72,8 +73,8 @@ uint8_t report[65] = {
   0xff, 0x40, 0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00
 };
 
@@ -190,7 +191,7 @@ void setup() {
   send_count = 0;
   rx_flag = 0;
   auth_state = 0;
-  micros_adjust = 0;
+  // micros_adjust = 0;
   report_len = sizeof(report);
   rx_counter = 0;
   auth_msg_count = 0;
@@ -255,13 +256,14 @@ void loop() {
 
   if (main_state == 6) {
 
-    if (buffer_out_flag && micros() >= buffer_out_micros) {
+    if (buffer_out_flag && micros() >= buffer_out_micros && micros() >= (last_report_sent_micros + 2200)) {
       Serial.write(buffer_out, buffer_out_len);
       buffer_out_flag = 0;
       last_report_tx = last_report_tx + 5000;
       if (micros() >= last_report_tx) last_report_tx = last_report_tx + 5000;
     }
     else if (micros() >= last_report_tx) {
+      last_report_sent_micros = micros();
       Serial.write(report, report_len);
       last_report_tx = last_report_tx + 5000;
     }
@@ -283,10 +285,10 @@ void loop() {
   if (PS4.connected()) {
 
     if (main_state == 0) {
-      noInterrupts();
+      // noInterrupts();
       Serial.write(0x11);
       Serial.write(0x00);
-      interrupts();
+      // interrupts();
       main_state = 1;
       last_rx = micros();
     }
@@ -303,11 +305,11 @@ void loop() {
         }
       }
     }
-    else if (main_state == 2 && last_rx + 2000 <= micros()) {
-      noInterrupts();
+    else if (main_state == 2 && last_rx + 1849 <= micros()) {
+      // noInterrupts();
       Serial.write(0x22);
       Serial.write(0x00);
-      interrupts();
+      // interrupts();
       main_state = 3;
       last_rx = micros();
     }
@@ -324,11 +326,11 @@ void loop() {
         }
       }
     }
-    else if (main_state == 4 && last_rx + 800000 <= micros()) {
-      noInterrupts();
+    else if (main_state == 4 && last_rx + 840000 <= micros()) {
+      // noInterrupts();
       Serial.write(0x33);
       Serial.write(0x00);
-      interrupts();
+      // interrupts();
       main_state = 5;
       last_rx = micros();
     }
@@ -340,7 +342,7 @@ void loop() {
           if (matches_boot2(byte_in)) {
             main_state = 6;
             last_rx = micros();
-            last_report_tx = micros();
+            last_report_tx = micros() + 7486;
             break;
           }
         }
@@ -421,17 +423,17 @@ void loop() {
       else if(PS4.getButtonPress(RIGHT)) report[7] = 0x02;
       else  report[7] = 0x08;
 
-      if (PS4.getButtonPress(TRIANGLE)) report[7] |= 0x80;
-      else report[7] &= ~0x80;
+      // if (PS4.getButtonPress(TRIANGLE)) report[7] |= 0x80;
+      // else report[7] &= ~0x80;
 
-      if (PS4.getButtonPress(CROSS)) report[7] |= 0x20;
-      else report[7] &= ~0x20;
+      // if (PS4.getButtonPress(CROSS)) report[7] |= 0x20;
+      // else report[7] &= ~0x20;
 
-      if (PS4.getButtonPress(SQUARE)) report[7] |= 0x10;
-      else report[7] &= ~0x10;
+      // if (PS4.getButtonPress(SQUARE)) report[7] |= 0x10;
+      // else report[7] &= ~0x10;
 
-      if (PS4.getButtonPress(CIRCLE)) report[7] |= 0x40;
-      else report[7] &= ~0x40;
+      // if (PS4.getButtonPress(CIRCLE)) report[7] |= 0x40;
+      // else report[7] &= ~0x40;
 
 
       if (PS4.getButtonPress(PS)) report[9] = 0x01;
@@ -443,36 +445,39 @@ void loop() {
       if (PS4.getButtonPress(OPTIONS)) report[8] |= 0x20;
       else report[8] &= ~0x20;
 
-      if (PS4.getButtonPress(L3)) report[8] |= 0x40;
-      else report[8] &= ~0x40;
+      // if (PS4.getButtonPress(L3)) report[8] |= 0x40;
+      // else report[8] &= ~0x40;
 
-      if (PS4.getButtonPress(R3)) report[8] |= 0x80;
-      else report[8] &= ~0x80;
+      // if (PS4.getButtonPress(R3)) report[8] |= 0x80;
+      // else report[8] &= ~0x80;
 
-      if (PS4.getButtonPress(L1)) report[8] |= 0x01;
-      else report[8] &= ~0x01;
+      // if (PS4.getButtonPress(L1)) report[8] |= 0x01;
+      // else report[8] &= ~0x01;
 
-      if (PS4.getButtonPress(R1)) report[8] |= 0x02;
-      else report[8] &= ~0x02;
+      // if (PS4.getButtonPress(R1)) report[8] |= 0x02;
+      // else report[8] &= ~0x02;
 
-      if (PS4.getButtonPress(L2)) report[8] |= 0x04;
-      else report[8] &= ~0x04;
+      // if (PS4.getButtonPress(L2)) report[8] |= 0x04;
+      // else report[8] &= ~0x04;
 
-      if (PS4.getButtonPress(R2)) report[8] |= 0x08;
-      else report[8] &= ~0x08;
+      // if (PS4.getButtonPress(R2)) report[8] |= 0x08;
+      // else report[8] &= ~0x08;
 
 
       // Wheel
+      // report[45] = 128;
+      // report[46] = PS4.getAnalogHat(LeftHatX);
       report[45] = 128;
-      report[46] = PS4.getAnalogHat(LeftHatX);
+      report[46] = 128;
 
-      // Gas
+      // // Gas
       report[47] = 255;
-      report[48] = 255 - PS4.getAnalogButton(R2);
+      // report[48] = 255 - PS4.getAnalogButton(R2);
+      report[48] = 255;
 
       report[49] = 255;
-      report[50] = 255 - PS4.getAnalogButton(L2);
-
+      // report[50] = 255 - PS4.getAnalogButton(L2);
+      report[50] = 255;
     }
   }
 }
