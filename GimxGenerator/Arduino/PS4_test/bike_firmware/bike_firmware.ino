@@ -505,29 +505,3 @@ void loop() {
 //     toggle = 1;
 //   }
 // }
-
-
-
-      // ps4_out[rx_counter] = Serial.read();
-      // if (ps4_out[(rx_counter-6) % 64] == 0x09 &&
-      //     ps4_out[(rx_counter-5) % 64] == 0xf0 &&
-      //     ps4_out[(rx_counter-4) % 64] == 0x03 &&
-      //     ps4_out[(rx_counter-3) % 64] == 0x00 &&
-      //     ps4_out[(rx_counter-2) % 64] == 0x00 &&
-      //     ps4_out[(rx_counter-1) % 64] == 0x40 &&
-      //     ps4_out[(rx_counter-0) % 64] == 0x00) {
-      //   // What follows next is an authentication challenge message
-      //   auth_msg_count = 0;
-      //   rx_counter = 0;
-      //   auth_rx_flag = 1;
-      // }
-      // else {
-      //   rx_counter++;
-      //   if (rx_counter == 64) rx_counter = 0;
-      // }
-      // if (auth_rx_flag == 1 && rx_counter == 64) {
-      //   PS4.authenticate(65, &ps4_out[0]);
-      //   auth_msg_count++;
-      //   rx_counter = 0;
-      // }
-      // digitalWrite(3, auth_msg_count % 2);
