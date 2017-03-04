@@ -42,8 +42,9 @@ uint8_t buffer_out[64] = {0};
 uint8_t buffer_out_len = 0;
 uint8_t buffer_out_flag = 0;
 uint8_t buffer_out_micros = 0;
+uint8_t update_flag = 0;
 
-
+unsigned long ps4_up;
 unsigned long last_report_tx;
 unsigned long last_report_sent_micros;
 // extern volatile unsigned long timer0_millis;
@@ -69,13 +70,13 @@ volatile int readFlag;
 
 
 
-uint8_t report[65] = {
+uint8_t report[66] = {
   0xff, 0x40, 0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
-  0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00
+  0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
 uint8_t ps4_out[64] = {0};
@@ -190,6 +191,7 @@ void setup() {
   loop_count = 0;
   send_count = 0;
   rx_flag = 0;
+  update_flag = 0;
   auth_state = 0;
   // micros_adjust = 0;
   report_len = sizeof(report);
@@ -296,6 +298,7 @@ void loop() {
       if (last_rx + 1000000 <= micros()) main_state = 0;
       else {
         while(Serial.available()) {
+          ps4_up = micros(); // First response from PS4
           byte_in = Serial.read();
           if (matches_boot0(byte_in)) {
             main_state = 2;
@@ -423,17 +426,17 @@ void loop() {
       else if(PS4.getButtonPress(RIGHT)) report[7] = 0x02;
       else  report[7] = 0x08;
 
-      // if (PS4.getButtonPress(TRIANGLE)) report[7] |= 0x80;
-      // else report[7] &= ~0x80;
+      if (PS4.getButtonPress(TRIANGLE)) report[7] |= 0x80;
+      else report[7] &= ~0x80;
 
-      // if (PS4.getButtonPress(CROSS)) report[7] |= 0x20;
-      // else report[7] &= ~0x20;
+      if (PS4.getButtonPress(CROSS)) report[7] |= 0x20;
+      else report[7] &= ~0x20;
 
-      // if (PS4.getButtonPress(SQUARE)) report[7] |= 0x10;
-      // else report[7] &= ~0x10;
+      if (PS4.getButtonPress(SQUARE)) report[7] |= 0x10;
+      else report[7] &= ~0x10;
 
-      // if (PS4.getButtonPress(CIRCLE)) report[7] |= 0x40;
-      // else report[7] &= ~0x40;
+      if (PS4.getButtonPress(CIRCLE)) report[7] |= 0x40;
+      else report[7] &= ~0x40;
 
 
       if (PS4.getButtonPress(PS)) report[9] = 0x01;
@@ -445,39 +448,46 @@ void loop() {
       if (PS4.getButtonPress(OPTIONS)) report[8] |= 0x20;
       else report[8] &= ~0x20;
 
-      // if (PS4.getButtonPress(L3)) report[8] |= 0x40;
-      // else report[8] &= ~0x40;
+      if (PS4.getButtonPress(L3)) report[8] |= 0x40;
+      else report[8] &= ~0x40;
 
-      // if (PS4.getButtonPress(R3)) report[8] |= 0x80;
-      // else report[8] &= ~0x80;
+      if (PS4.getButtonPress(R3)) report[8] |= 0x80;
+      else report[8] &= ~0x80;
 
-      // if (PS4.getButtonPress(L1)) report[8] |= 0x01;
-      // else report[8] &= ~0x01;
+      if (PS4.getButtonPress(L1)) report[8] |= 0x01;
+      else report[8] &= ~0x01;
 
-      // if (PS4.getButtonPress(R1)) report[8] |= 0x02;
-      // else report[8] &= ~0x02;
+      if (PS4.getButtonPress(R1)) report[8] |= 0x02;
+      else report[8] &= ~0x02;
 
-      // if (PS4.getButtonPress(L2)) report[8] |= 0x04;
-      // else report[8] &= ~0x04;
+      if (PS4.getButtonPress(L2)) report[8] |= 0x04;
+      else report[8] &= ~0x04;
 
-      // if (PS4.getButtonPress(R2)) report[8] |= 0x08;
-      // else report[8] &= ~0x08;
+      if (PS4.getButtonPress(R2)) report[8] |= 0x08;
+      else report[8] &= ~0x08;
 
+      if (update_flag == 0 && (micros() - ps4_up) > 3940000) {
+        report[45] = 0xfb;
+        report[46] = 0x7e;
+        update_flag = 1;
+      }
 
       // Wheel
+      report[45] = PS4.getAnalogHat(LeftHatX);;
+      report[46] = PS4.getAnalogHat(LeftHatX);
       // report[45] = 128;
-      // report[46] = PS4.getAnalogHat(LeftHatX);
-      report[45] = 128;
-      report[46] = 128;
+      // report[46] = 128;
 
-      // // Gas
-      report[47] = 255;
-      // report[48] = 255 - PS4.getAnalogButton(R2);
-      report[48] = 255;
+      // Gas
+      report[47] = 255 - PS4.getAnalogButton(R2);
+      report[48] = 255 - PS4.getAnalogButton(R2);
+      // report[48] = 255;
 
-      report[49] = 255;
-      // report[50] = 255 - PS4.getAnalogButton(L2);
-      report[50] = 255;
+      // Brake
+      report[49] = 255 - PS4.getAnalogButton(L2);
+      report[50] = 255 - PS4.getAnalogButton(L2);
+      // report[50] = 255;
+
     }
   }
 }
