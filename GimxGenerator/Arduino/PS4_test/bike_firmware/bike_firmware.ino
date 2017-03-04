@@ -516,12 +516,6 @@ void loop() {
         }
       }
 
-      if (last_rx + 1000 >= millis()) {
-        digitalWrite(3, HIGH);
-      }
-      if (last_rx + 1500 >= millis()) {
-        digitalWrite(3, LOW);
-      }
       // Read the controller state
       if (PS4.getButtonPress(UP)) report[7] = 0x00;
       else if (PS4.getButtonPress(DOWN)) report[7] = 0x04;
