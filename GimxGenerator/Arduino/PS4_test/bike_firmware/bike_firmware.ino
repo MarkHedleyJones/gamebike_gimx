@@ -41,10 +41,11 @@ volatile int pedal_period = 0;
 uint8_t buffer_out[64] = {0};
 uint8_t buffer_out_len = 0;
 uint8_t buffer_out_flag = 0;
-uint8_t buffer_out_millis = 0;
+uint8_t buffer_out_micros = 0;
 
 unsigned long last_report_tx;
-extern volatile unsigned long timer0_millis;
+unsigned long micros_adjust;
+// extern volatile unsigned long timer0_millis;
 uint8_t byte_in;
 uint8_t head_chall[6] = {0xf0, 0x03, 0x00, 0x00, 0x40, 0x00};
 uint8_t head_check[6] =  {0xf2, 0x03, 0x00, 0x00, 0x10, 0x00};
@@ -197,14 +198,14 @@ void setup() {
   send_count = 0;
   rx_flag = 0;
   auth_state = 0;
-
+  micros_adjust = 0;
   report_len = sizeof(report);
   rx_counter = 0;
   auth_msg_count = 0;
   auth_rx_flag = 0;
   send_check_response = 0;
   main_state = 0;
-  last_report_tx = 1000;
+  last_report_tx = 0;
 #if !defined(__MIPSEL__)
   while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
 #endif
@@ -259,14 +260,14 @@ bool matches_boot2(uint8_t byte_in) {
 }
 
 //Sets the millis value
-void setMillis(unsigned long new_millis)
-{
-  uint8_t oldSREG = SREG;
+// void setMillis(unsigned long new_millis)
+// {
+//   uint8_t oldSREG = SREG;
 
-  cli();
-  timer0_millis = new_millis;
-  SREG = oldSREG;
-}
+//   cli();
+//   timer0_millis = new_millis;
+//   SREG = oldSREG;
+// }
 
 void loop() {
 
@@ -274,15 +275,15 @@ void loop() {
 
   if (main_state == 6) {
 
-    if (buffer_out_flag && millis() >= buffer_out_millis) {
+    if (buffer_out_flag && micros() >= buffer_out_micros) {
       Serial.write(buffer_out, buffer_out_len);
       buffer_out_flag = 0;
-      last_report_tx = last_report_tx + 5;
-      if (millis() >= last_report_tx) last_report_tx = last_report_tx + 5;
+      last_report_tx = last_report_tx + 5000;
+      if (micros() >= last_report_tx) last_report_tx = last_report_tx + 5000;
     }
-    else if (millis() >= last_report_tx) {
+    else if (micros() >= last_report_tx) {
       Serial.write(report, report_len);
-      last_report_tx = last_report_tx + 5;
+      last_report_tx = last_report_tx + 5000;
     }
   }
 
@@ -307,59 +308,61 @@ void loop() {
       Serial.write(0x00);
       interrupts();
       main_state = 1;
-      last_rx = millis();
+      last_rx = micros();
     }
     else if (main_state == 1) {
-      if (last_rx + 1000 <= millis()) main_state = 0;
+      if (last_rx + 1000000 <= micros()) main_state = 0;
       else {
         while(Serial.available()) {
           byte_in = Serial.read();
           if (matches_boot0(byte_in)) {
             main_state = 2;
-            last_rx = millis();
+            last_rx = micros();
             break;
           }
         }
       }
     }
-    else if (main_state == 2 && last_rx + 2 <= millis()) {
+    else if (main_state == 2 && last_rx + 2000 <= micros()) {
       noInterrupts();
       Serial.write(0x22);
       Serial.write(0x00);
       interrupts();
       main_state = 3;
-      last_rx = millis();
+      last_rx = micros();
     }
     else if (main_state == 3) {
-      if (last_rx + 1000 <= millis()) main_state = 2;
+      if (last_rx + 1000000 <= micros()) main_state = 2;
       else {
         while(Serial.available()) {
           byte_in = Serial.read();
           if (matches_boot1(byte_in)) {
             main_state = 4;
             break;
-            last_rx = millis();
+            last_rx = micros();
           }
         }
       }
     }
-    else if (main_state == 4 && last_rx + 800 <= millis()) {
+    else if (main_state == 4 && last_rx + 800000 <= micros()) {
       noInterrupts();
       Serial.write(0x33);
       Serial.write(0x00);
       interrupts();
       main_state = 5;
-      last_rx = millis();
+      last_rx = micros();
     }
     else if (main_state == 5) {
-      if (last_rx + 1000 <= millis()) main_state = 4;
+      if (last_rx + 1000000 <= micros()) main_state = 4;
       else {
         while(Serial.available()) {
           byte_in = Serial.read();
           if (matches_boot2(byte_in)) {
             main_state = 6;
-            last_rx = millis();
-            setMillis(0);
+            last_rx = micros();
+            // setMillis(0);
+            last_report_tx = micros();
+            // micros_adjust = micros();
             break;
           }
         }
@@ -447,7 +450,7 @@ void loop() {
           for (uint8_t i = 2; i < 18; i++) buffer_out[i] = check_response[i-2];
           buffer_out_len = 18;
           buffer_out_flag = 1;
-          buffer_out_millis = millis() + 2;
+          buffer_out_micros = micros() + 1200;
 
           // interrupts();
           // Serial.flush();
@@ -493,7 +496,7 @@ void loop() {
           for (uint8_t i = 2; i < 66; i++) buffer_out[i] = resp[i-2];
           buffer_out_len = 66;
           buffer_out_flag = 1;
-          buffer_out_millis = millis() + 2;
+          buffer_out_micros = micros() + 1200;
           // Send response to PS4
           // noInterrupts();
           // Serial.write(0x44);
