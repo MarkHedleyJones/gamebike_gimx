@@ -1,0 +1,9 @@
+Gamebike Pinouts
+
+Analog0 = Analog brake
+Anglog1 = Steering
+Anglog2 = Difficulty
+Anglog3 = Digital brake
+Digital2 = Pedal out
+
+

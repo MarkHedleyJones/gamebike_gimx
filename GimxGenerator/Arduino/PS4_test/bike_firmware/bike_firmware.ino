@@ -13,6 +13,24 @@
 #include <SPI.h>
 #endif
 
+#define ADC_AVG_LEN 4
+#define PEDAL_AVG_LEN 8
+#define MAX_PEDAL_PERIOD 100000
+#define MIN_PEDAL_PERIOD  15000
+
+#define EASY_PEDAL_MIN 0.0
+#define EASY_PEDAL_MAX 10.0
+
+#define MED_PEDAL_MIN 0.5
+#define MED_PEDAL_MAX 40.0
+
+#define HARD_PEDAL_MIN 1.0
+#define HARD_PEDAL_MAX 90.0
+
+#define LED_DEBUG 0
+
+uint8_t difficulty = 1;
+
 USB Usb;
 PS4USB PS4(&Usb);
 
@@ -35,9 +53,11 @@ int8_t rx_counter;
 uint8_t auth_msg_count = 0;
 bool auth_rx_flag = 0;
 uint8_t auth_cycles = 0;
-volatile int pedal_tmp = 0;
-volatile int pedal_period = 0;
-
+// volatile int pedal_tmp = 0;
+// volatile int pedal_period = 0;
+double random_double = 0.0;
+uint16_t random_counter = 0;
+bool last_thing = 0;
 uint8_t buffer_out[64] = {0};
 uint8_t buffer_out_len = 0;
 uint8_t buffer_out_flag = 0;
@@ -65,9 +85,15 @@ uint8_t match_boot2 = 0;
 bool tx_report_flag = 0;
 uint8_t main_state = 0;
 unsigned int tcnt2;
-
-volatile int readFlag;
-
+bool difficulty_change_flag = 0;
+volatile uint32_t adc_avg_tmp;
+volatile uint8_t adc_loop_count;
+volatile uint8_t adc_channel;
+volatile uint16_t adc_tmp;
+volatile uint16_t adc_tmp_steer[ADC_AVG_LEN];
+volatile uint16_t adc_tmp_brake[ADC_AVG_LEN];
+volatile uint32_t pedal_tmp_avg[PEDAL_AVG_LEN];
+uint8_t pedal_tmp_counter = 0;
 
 
 uint8_t report[66] = {
@@ -136,9 +162,9 @@ void setupADC(){
   sei();
 
   // Kick off the first ADC
-  readFlag = 0;
   // Set ADSC in ADCSRA (0x7A) to start the ADC conversion
   ADCSRA |=B01000000;
+
 }
 
 // void setup_regularinterrupt() {
@@ -178,14 +204,27 @@ void setupADC(){
 //   TIMSK2 |= (1<<TOIE2);
 // }
 
+uint16_t avg_steer() {
+  adc_avg_tmp = 0;
+  for (uint8_t i = 0; i < ADC_AVG_LEN; i++) adc_avg_tmp += adc_tmp_steer[i];
+  return adc_avg_tmp >> 2;
+}
+
+uint16_t avg_brake() {
+  adc_avg_tmp = 0;
+  for (uint8_t i = 0; i < ADC_AVG_LEN; i++) adc_avg_tmp += adc_tmp_brake[i];
+  return adc_avg_tmp >> 2;
+}
+
+
 void setup() {
-  // setupADC();
   // setup_regularinterrupt();
   pinMode(A0, INPUT);
   pinMode(A1, INPUT);
-  pinMode(A2, INPUT);
+  pinMode(A2, INPUT_PULLUP);
+  pinMode(A3, INPUT_PULLUP);
+  pinMode(A4, INPUT_PULLUP);
   pinMode(2, INPUT);
-  pinMode(10, INPUT);
   toggle = 0;
   tog = 0;
   loop_count = 0;
@@ -208,7 +247,22 @@ void setup() {
     while (1); // Halt
   }
   b = 0;
-  Serial.begin(500000);
+  // Serial.begin(500000);
+  Serial.begin(9600);
+  setupADC();
+  // attachInterrupt(0, timeit, FALLING);
+  // timeit();
+  attachInterrupt(0, timeit, FALLING);
+}
+
+uint32_t pedal_interval;
+uint32_t last_time;
+
+void timeit() {
+  pedal_interval = micros() - last_time;
+  last_time = micros();
+  // if (digitalRead(2))
+  // else attachInterrupt(0, timeit, RISING);
 }
 
 // void rising() {
@@ -251,6 +305,66 @@ bool matches_boot2(uint8_t byte_in) {
   return matches_head(byte_in, head_boot2, 2, match_boot2);
 }
 
+uint32_t pedal_period() {
+  uint32_t out;
+  if (micros() - last_time > MAX_PEDAL_PERIOD) {
+    out = MAX_PEDAL_PERIOD;
+  }
+  else if (pedal_interval > MAX_PEDAL_PERIOD) {
+    out = MAX_PEDAL_PERIOD;
+  }
+  else {
+    out = pedal_interval;
+  }
+  pedal_tmp_avg[pedal_tmp_counter++] = out;
+  out = 0.0;
+  for (uint8_t i = 0; i < PEDAL_AVG_LEN; i++) {
+    out = out + pedal_tmp_avg[i];
+  }
+  out = out / PEDAL_AVG_LEN;
+  if (pedal_tmp_counter == PEDAL_AVG_LEN) pedal_tmp_counter = 0;
+  return out;
+}
+
+double pedal_scaled(uint32_t period) {
+  random_double = (1.0 / period) * 1000000.0;
+  double max = (1.0/ MIN_PEDAL_PERIOD) * 1000000.0;
+  double min = (1.0/ MAX_PEDAL_PERIOD) * 1000000.0;
+  double range = max - min;
+  random_double = random_double - min;
+  random_double = random_double / range;
+  random_double = random_double * 32.0;
+  random_double = (random_double * random_double * random_double);
+  random_double = random_double / 32768;
+  // random_double = random_double - ((1.0 / MAX_PEDAL_PERIOD) * 1000000);
+  // return ((random_double * random_double) / (((1.0/ MIN_PEDAL_PERIOD) * 1000000) * ((1.0/ MIN_PEDAL_PERIOD) * 1000000))) * 100.0;
+  double out;
+  if (random_double > 1.0) out = 100.0;
+  else out = random_double * 100.0;
+
+  switch (difficulty) {
+    case 0:
+      out = out - EASY_PEDAL_MIN;
+      out = out / (EASY_PEDAL_MAX - EASY_PEDAL_MIN);
+      out = out * 100.0;
+      break;
+
+    case 1:
+      out = out - MED_PEDAL_MIN;
+      out = out / (MED_PEDAL_MAX - MED_PEDAL_MIN);
+      out = out * 100.0;
+      break;
+
+    case 2:
+      out = out - HARD_PEDAL_MIN;
+      out = out / (HARD_PEDAL_MAX - HARD_PEDAL_MIN);
+      out = out * 100.0;
+      break;
+  }
+  if (out > 100.0) out = 100.0;
+  else if (out < 0) out = 0.0;
+  return out;
+}
 
 void loop() {
 
@@ -285,6 +399,40 @@ void loop() {
   // Off = 0x00,
 
   if (PS4.connected()) {
+
+    if (((PS4.getButtonClick(L1)) | (PS4.getButtonClick(L2))) && difficulty_change_flag == 0) {
+      difficulty_change_flag = 1;
+      difficulty--;
+      Serial.print(50.0);
+      Serial.print("\n");
+      if (difficulty < 0) difficulty = 0;
+
+    }
+    else if (((PS4.getButtonClick(R1)) | (PS4.getButtonClick(R2))) && difficulty_change_flag == 0) {
+      difficulty_change_flag = 1;
+      difficulty++;
+      Serial.print(50.0);
+      Serial.print("\n");
+      if (difficulty > 2) difficulty = 2;
+      difficulty_change_flag = 1;
+    }
+    else {
+      difficulty_change_flag = 0;
+    }
+
+    switch (difficulty) {
+      case 0:
+        PS4.setLed(0xFF00);
+        break;
+
+      case 1:
+        PS4.setLed(0xFFEB04);
+        break;
+
+      case 2:
+        PS4.setLed(0xFF0000);
+        break;
+    }
 
     if (main_state == 0) {
       // noInterrupts();
@@ -370,19 +518,23 @@ void loop() {
             rx_counter = 0;
             loop_count++;
 
-            if (ps4_out[2] == 0) PS4.setLed(0x000033);
-            else if (ps4_out[2] == 1) PS4.setLed(0x000066);
-            else if (ps4_out[2] == 2) PS4.setLed(0x000099);
-            else if (ps4_out[2] == 3) PS4.setLed(0x0000CC);
-            else if (ps4_out[2] == 4)  {
-              PS4.setLed(0x0000FF);
+            if (LED_DEBUG) {
+              if (ps4_out[2] == 0) PS4.setLed(0x000033);
+              else if (ps4_out[2] == 1) PS4.setLed(0x000066);
+              else if (ps4_out[2] == 2) PS4.setLed(0x000099);
+              else if (ps4_out[2] == 3) PS4.setLed(0x0000CC);
+              else if (ps4_out[2] == 4)  {
+                PS4.setLed(0x0000FF);
+              }
             }
             PS4.authenticate(64, ps4_out);
 
           }
         }
         if (matches_chall(byte_in)) {
-          PS4.setLed(0x000000);
+
+          if (LED_DEBUG) PS4.setLed(0x000000);
+
           auth_rx_flag = 1;
           head_match = 0;
           rx_counter = 0;
@@ -391,9 +543,11 @@ void loop() {
 
           PS4.authenticate2(16, check_response);
 
-          if (check_response[2] == 0x00) PS4.setLed(Green);
-          else if (check_response[2] == 0x10) PS4.setLed(Yellow);
-          else PS4.setLed(Red);
+          if (LED_DEBUG) {
+            if (check_response[2] == 0x00) PS4.setLed(Green);
+            else if (check_response[2] == 0x10) PS4.setLed(Yellow);
+            else PS4.setLed(Red);
+          }
 
           buffer_out[0] = 0x44;
           buffer_out[1] = 0x10;
@@ -407,8 +561,10 @@ void loop() {
           // Request response from DS4
           PS4.authenticate3(64, resp);
 
-          if (resp[2] & 1) PS4.setLed(0x444444);
-          else PS4.setLed(0xFFFFFF);
+          if (LED_DEBUG) {
+            if (resp[2] & 1) PS4.setLed(0x444444);
+            else PS4.setLed(0xFFFFFF);
+          }
 
           buffer_out[0] = 0x44;
           buffer_out[1] = 0x40;
@@ -454,17 +610,18 @@ void loop() {
       if (PS4.getButtonPress(R3)) report[8] |= 0x80;
       else report[8] &= ~0x80;
 
-      if (PS4.getButtonPress(L1)) report[8] |= 0x01;
-      else report[8] &= ~0x01;
+      // if (PS4.getButtonPress(L1)) report[8] |= 0x01;
+      // else report[8] &= ~0x01;
 
-      if (PS4.getButtonPress(R1)) report[8] |= 0x02;
-      else report[8] &= ~0x02;
+      // if (PS4.getButtonPress(R1)) report[8] |= 0x02;
+      // else report[8] &= ~0x02;
 
-      if (PS4.getButtonPress(L2)) report[8] |= 0x04;
-      else report[8] &= ~0x04;
 
-      if (PS4.getButtonPress(R2)) report[8] |= 0x08;
-      else report[8] &= ~0x08;
+      // if (PS4.getButtonPress(L2)) report[8] |= 0x04;
+      // else report[8] &= ~0x04;
+
+      // if (PS4.getButtonPress(R2)) report[8] |= 0x08;
+      // else report[8] &= ~0x08;
 
       if (update_flag == 0 && (micros() - ps4_up) > 3940000) {
         report[45] = 0xfb;
@@ -473,25 +630,51 @@ void loop() {
       }
 
       // Wheel
-      report[45] = PS4.getAnalogHat(LeftHatX);;
-      report[46] = PS4.getAnalogHat(LeftHatX);
+      // report[45] = PS4.getAnalogHat(LeftHatX);;
+      // report[46] = PS4.getAnalogHat(LeftHatX);
       // report[45] = 128;
       // report[46] = 128;
 
       // Gas
-      report[47] = 255 - PS4.getAnalogButton(R2);
-      report[48] = 255 - PS4.getAnalogButton(R2);
+      // report[47] = 255 - PS4.getAnalogButton(R2);
+      // report[48] = 255 - PS4.getAnalogButton(R2);
       // report[48] = 255;
 
       // Brake
-      report[49] = 255 - PS4.getAnalogButton(L2);
-      report[50] = 255 - PS4.getAnalogButton(L2);
+      // report[49] = 255 - PS4.getAnalogButton(L2);
+      // report[50] = 255 - PS4.getAnalogButton(L2);
       // report[50] = 255;
 
     }
   }
-}
+  // Serial.print(avg_steer());
+  // Serial.print(',');
+  // Serial.print(avg_brake());
+  // Serial.print(',');
+  // Serial.print(digitalRead(A2)); // Handbrake
+  // Serial.print(',');
+  // Serial.print(digitalRead(A3)); // Gear Up
+  // Serial.print(',');
+  // Serial.print(digitalRead(A4)); // Gear Down
+  // Serial.print("\n");
 
+  // if (digitalRead(2) != last_thing) {
+  //   last_thing = digitalRead(2);
+  //   Serial.print(random_counter++);
+  //   Serial.print("\n");
+  // }
+  random_counter++;
+  Serial.print(pedal_scaled(pedal_period()));
+  Serial.print("\n");
+  if (random_counter % 400 == 0) {
+    Serial.print(pedal_scaled(MAX_PEDAL_PERIOD));
+    Serial.print("\n");
+    Serial.print(pedal_scaled(MIN_PEDAL_PERIOD));
+    Serial.print("\n");
+    // Serial.print(0);
+    // Serial.print("\n");
+  }
+}
 // Interrupt is called once a millisecond,
 // ISR(TIMER1_OVF_vect)
 // {
@@ -499,7 +682,7 @@ void loop() {
 // }
 
 
-// // Interrupt service routine for the ADC completion
+// Interrupt service routine for the ADC completion
 // ISR(ADC_vect){
 
 //   // Done reading
@@ -507,16 +690,40 @@ void loop() {
 
 //   if (toggle) {
 //     // Steering
-//     report[46] = ADCL;
-//     report[47] = ADCH;
+//     report[49] = ADCL;
+//     report[50] = ADCH;
 //     ADMUX |= B00000001;
 //     toggle = 0;
 //   }
 //   else {
 //     // Braking
-//     report[50] = ADCL;
-//     report[51] = ADCH;
+//     report[45] = ADCL;
+//     report[46] = ADCH;
 //     ADMUX &= B11111110;
 //     toggle = 1;
 //   }
 // }
+
+// Interrupt service routine for the ADC completion
+ISR(ADC_vect){
+  if (adc_channel == 0) {
+    adc_tmp = ADCL;
+    adc_tmp |= (ADCH << 8);
+    adc_tmp = adc_tmp << 6;
+    adc_tmp_steer[adc_loop_count] = adc_tmp;
+    ADMUX &= B11111110;
+    adc_channel = 1;
+  }
+  else {
+    adc_tmp = ADCL;
+    adc_tmp |= (ADCH << 8);
+    adc_tmp = adc_tmp << 6;
+    adc_tmp_brake[adc_loop_count] = adc_tmp;
+    ADMUX |= B00000001;
+    adc_channel = 0;
+    adc_loop_count++;
+  }
+
+  if (adc_loop_count == ADC_AVG_LEN) adc_loop_count = 0;
+
+}
