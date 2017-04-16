@@ -12,6 +12,7 @@
 #include <spi4teensy3.h>
 #include <SPI.h>
 #endif
+#include <avr/wdt.h>
 
 #define ADC_AVG_LEN 4
 #define PEDAL_AVG_LEN 8
@@ -29,17 +30,23 @@
 
 #define LED_DEBUG 0
 
-uint8_t difficulty = 1;
+#define MAX_RESET 7
+#define GIMX_RESET A5
 
+uint8_t difficulty = 1;
+uint16_t bit_toggle = 4;
+uint16_t steer_min = 30608;
+uint16_t steer_max = 42600;
 USB Usb;
 PS4USB PS4(&Usb);
-
+uint8_t bit_toggle_flag = 0;
 bool printAngle, printTouch;
 uint8_t oldL2Value, oldR2Value;
 uint32_t loop_count;
 uint8_t send_count;
 uint8_t auth_state;
 bool rx_flag;
+// uint8_t gear = 1;
 unsigned long last_tx;
 unsigned long last_rx;
 uint8_t resp[64] = {0};
@@ -53,6 +60,7 @@ int8_t rx_counter;
 uint8_t auth_msg_count = 0;
 bool auth_rx_flag = 0;
 uint8_t auth_cycles = 0;
+uint16_t pedal_int = 0;
 // volatile int pedal_tmp = 0;
 // volatile int pedal_period = 0;
 double random_double = 0.0;
@@ -63,7 +71,7 @@ uint8_t buffer_out_len = 0;
 uint8_t buffer_out_flag = 0;
 uint8_t buffer_out_micros = 0;
 uint8_t update_flag = 0;
-
+uint8_t bytenum = 0xFF - 96;
 unsigned long ps4_up;
 unsigned long last_report_tx;
 unsigned long last_report_sent_micros;
@@ -86,6 +94,7 @@ bool tx_report_flag = 0;
 uint8_t main_state = 0;
 unsigned int tcnt2;
 bool difficulty_change_flag = 0;
+// bool gear_change_flag = 0;
 volatile uint32_t adc_avg_tmp;
 volatile uint8_t adc_loop_count;
 volatile uint8_t adc_channel;
@@ -94,14 +103,16 @@ volatile uint16_t adc_tmp_steer[ADC_AVG_LEN];
 volatile uint16_t adc_tmp_brake[ADC_AVG_LEN];
 volatile uint32_t pedal_tmp_avg[PEDAL_AVG_LEN];
 uint8_t pedal_tmp_counter = 0;
+bool connected = 0;
 
 
 uint8_t report[66] = {
-  0xff, 0x40, 0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
-  0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
+  0xff, 0x40, 0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
@@ -213,18 +224,47 @@ uint16_t avg_steer() {
 uint16_t avg_brake() {
   adc_avg_tmp = 0;
   for (uint8_t i = 0; i < ADC_AVG_LEN; i++) adc_avg_tmp += adc_tmp_brake[i];
-  return adc_avg_tmp >> 2;
+  return 0xFFFF - (adc_avg_tmp >> 2);
 }
 
+// void set_report_bit(uint16_t num) {
+//   uint8_t res = (1 << (num & 0b11));
+//   if (!digitalRead(A3)) report[num >> 2] |= res;
+//   else report[num >> 2] &= ~res;
+// }
+
+void watchdogSetup(void) {
+  cli();  // disable all interrupts
+  wdt_reset(); // reset the WDT timer
+  /*
+  WDTCSR configuration:
+  WDIE = 1: Interrupt Enable
+  WDE = 1 :Reset Enable
+  WDP3 = 0 :For 2000ms Time-out
+  WDP2 = 1 :For 2000ms Time-out
+  WDP1 = 1 :For 2000ms Time-out
+  WDP0 = 1 :For 2000ms Time-out
+  */
+  // Enter Watchdog Configuration mode:
+  WDTCSR |= (1<<WDCE) | (1<<WDE);
+  // Set Watchdog settings:
+  WDTCSR = (1<<WDIE) | (1<<WDE) | (0<<WDP3) | (1<<WDP2) | (1<<WDP1) | (1<<WDP0);
+  sei();
+}
 
 void setup() {
+  watchdogSetup();
   // setup_regularinterrupt();
   pinMode(A0, INPUT);
   pinMode(A1, INPUT);
   pinMode(A2, INPUT_PULLUP);
   pinMode(A3, INPUT_PULLUP);
   pinMode(A4, INPUT_PULLUP);
+  pinMode(A5, OUTPUT);
   pinMode(2, INPUT);
+  pinMode(MAX_RESET, OUTPUT );
+
+  digitalWrite(GIMX_RESET, LOW);
   toggle = 0;
   tog = 0;
   loop_count = 0;
@@ -240,19 +280,32 @@ void setup() {
   send_check_response = 0;
   main_state = 0;
   last_report_tx = 0;
+  wdt_reset();
+  Serial.begin(500000);
+  // Serial.begin(9600);
+  // Serial.print("\nSerial -up\n");
+  digitalWrite( MAX_RESET, HIGH);  //release MAX3421E from reset
 #if !defined(__MIPSEL__)
   while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
 #endif
   if (Usb.Init() == -1) {
-    while (1); // Halt
+    while (1) {
+    // Serial.print("Halted, ");
+    digitalWrite( MAX_RESET, LOW);  //release MAX3421E from reset
+    }
   }
   b = 0;
-  // Serial.begin(500000);
-  Serial.begin(9600);
+
+  Serial.write(0x55);
+  Serial.write(0x00);
+
+  // Serial.begin(9600);
   setupADC();
   // attachInterrupt(0, timeit, FALLING);
   // timeit();
   attachInterrupt(0, timeit, FALLING);
+  digitalWrite(GIMX_RESET, HIGH); // Release the GIMX adaptor from RESET
+  wdt_reset();
 }
 
 uint32_t pedal_interval;
@@ -366,9 +419,18 @@ double pedal_scaled(uint32_t period) {
   return out;
 }
 
+uint16_t tx_counter = 0;
+
+uint32_t led_counter = 0;
+uint32_t led_color = 0;
+double led_value = 0;
+uint16_t tmp = 0;
+
 void loop() {
 
+  wdt_reset();
   Usb.Task();
+
 
   if (main_state == 6) {
 
@@ -380,9 +442,18 @@ void loop() {
     }
     else if (micros() >= last_report_tx) {
       last_report_sent_micros = micros();
+
+      // Send out a push of the PS button to cause a connect event
+      if (!connected) {
+        if (tx_counter < 1000) report[9] = 0x01;
+        else connected = 1;
+      }
+
       Serial.write(report, report_len);
+      tx_counter++;
       last_report_tx = last_report_tx + 5000;
     }
+
   }
 
 
@@ -400,38 +471,73 @@ void loop() {
 
   if (PS4.connected()) {
 
-    if (((PS4.getButtonClick(L1)) | (PS4.getButtonClick(L2))) && difficulty_change_flag == 0) {
-      difficulty_change_flag = 1;
-      difficulty--;
-      Serial.print(50.0);
-      Serial.print("\n");
-      if (difficulty < 0) difficulty = 0;
+    // Serial.print(PS4.getAnalogHat(LeftHatX));
+    // Serial.print(",");
+    // Serial.print(PS4.getAnalogHat(LeftHatY));
+    // Serial.print(",");
+    // Serial.print(PS4.getAnalogHat(RightHatX));
+    // Serial.print(",");
+    // Serial.print(PS4.getAnalogHat(RightHatY));
+    // Serial.print("\n");
 
+    if (PS4.getButtonClick(L2) && difficulty_change_flag == 0) {
+      difficulty_change_flag = 1;
+      if (difficulty > 0) difficulty--;
     }
-    else if (((PS4.getButtonClick(R1)) | (PS4.getButtonClick(R2))) && difficulty_change_flag == 0) {
+    else if (PS4.getButtonClick(R2) && difficulty_change_flag == 0) {
       difficulty_change_flag = 1;
-      difficulty++;
-      Serial.print(50.0);
-      Serial.print("\n");
-      if (difficulty > 2) difficulty = 2;
-      difficulty_change_flag = 1;
+      if (difficulty < 3) difficulty++;
     }
     else {
       difficulty_change_flag = 0;
     }
 
-    switch (difficulty) {
-      case 0:
-        PS4.setLed(0xFF00);
-        break;
+    // if (!digitalRead(A4) && gear_change_flag == 0) {
+    //   gear_change_flag = 1;
+    //   if (gear > 0) gear--;
+    // }
+    // else if (!digitalRead(A3) && gear_change_flag == 0) {
+    //   gear_change_flag = 1;
+    //   if (gear < 7) gear++;
+    // }
+    // else if (digitalRead(A4) && digitalRead(A3)) {
+    //   gear_change_flag = 0;
+    // }
 
-      case 1:
-        PS4.setLed(0xFFEB04);
-        break;
+    if (main_state == 6) {
+      switch (difficulty) {
+        case 0:
+          PS4.setLed(0xFF00);
+          break;
 
-      case 2:
-        PS4.setLed(0xFF0000);
-        break;
+        case 1:
+          PS4.setLed(0xFFEB04);
+          break;
+
+        case 2:
+          PS4.setLed(0xFF0000);
+          break;
+      }
+    }
+    else {
+      // led_value = led_counter / 1000.0;
+      // led_value = (sin(led_value) + 1.0) / 2.0;
+      // led_value = led_value * 255;
+      tmp = (uint8_t) (128.0 + 128 * sin(led_counter / 500.0));
+      uint32_t leds;
+      leds = tmp;
+      leds = leds << 8;
+      leds |= tmp;
+      leds = leds << 8;
+      leds |= tmp;
+
+      // led_color = (tmp << 4);
+      // led_color |= tmp << 2;
+      // led_color |= tmp;
+      // Serial.print(tmp);
+      // Serial.print("\n");
+      PS4.setLed(leds);
+      led_counter++;
     }
 
     if (main_state == 0) {
@@ -582,6 +688,8 @@ void loop() {
       else if(PS4.getButtonPress(RIGHT)) report[7] = 0x02;
       else  report[7] = 0x08;
 
+      // report[7] = 0x08;
+
       if (PS4.getButtonPress(TRIANGLE)) report[7] |= 0x80;
       else report[7] &= ~0x80;
 
@@ -591,7 +699,7 @@ void loop() {
       if (PS4.getButtonPress(SQUARE)) report[7] |= 0x10;
       else report[7] &= ~0x10;
 
-      if (PS4.getButtonPress(CIRCLE)) report[7] |= 0x40;
+      if (PS4.getButtonPress(CIRCLE) | !digitalRead(A2)) report[7] |= 0x40;
       else report[7] &= ~0x40;
 
 
@@ -610,11 +718,20 @@ void loop() {
       if (PS4.getButtonPress(R3)) report[8] |= 0x80;
       else report[8] &= ~0x80;
 
-      // if (PS4.getButtonPress(L1)) report[8] |= 0x01;
-      // else report[8] &= ~0x01;
+      if (PS4.getButtonPress(L1) | !digitalRead(A4)) report[8] |= 0x01;
+      else report[8] &= ~0x01;
 
-      // if (PS4.getButtonPress(R1)) report[8] |= 0x02;
-      // else report[8] &= ~0x02;
+      if (PS4.getButtonPress(R1) | !digitalRead(A3)) report[8] |= 0x02;
+      else report[8] &= ~0x02;
+
+
+
+      // if (!digitalRead(A4)) report[10] |= 0x01;
+      // else report[10] &= ~0x01;
+
+      // if (!digitalRead(A3)) report[10] |= 0x02;
+      // else report[10] &= ~0x02;
+
 
 
       // if (PS4.getButtonPress(L2)) report[8] |= 0x04;
@@ -629,16 +746,117 @@ void loop() {
         update_flag = 1;
       }
 
+
+      // if (!digitalRead(A4)) report[10] |= 0x01;
+      // else report[10] &= ~0x01;
+
+      // if (!digitalRead(A3)) report[10] |= 0x02;
+      // else report[10] &= ~0x02;
+
+
+      // if (!digitalRead(A4) && !bit_toggle_flag) {
+      //   bit_toggle++;
+      //   bit_toggle_flag = 1;
+      // }
+
+      // if (digitalRead(A4) && bit_toggle_flag) bit_toggle_flag = 0;
+      // else report[10] &= ~0x01;
+
       // Wheel
       // report[45] = PS4.getAnalogHat(LeftHatX);;
       // report[46] = PS4.getAnalogHat(LeftHatX);
       // report[45] = 128;
       // report[46] = 128;
 
+
+    // Serial.print(PS4.getAnalogHat(LeftHatX));
+    // Serial.print(",");
+    // Serial.print(PS4.getAnalogHat(LeftHatY));
+    // Serial.print(",");
+    // Serial.print(PS4.getAnalogHat(RightHatX));
+    // Serial.print(",");
+
+    // Serial.print(PS4.getAnalogHat(RightHatY));
+    // Serial.print("\n");
+
+
+      if (PS4.getAnalogHat(RightHatX) < 118 | PS4.getAnalogHat(RightHatX) > 138) {
+        report[45] = PS4.getAnalogHat(RightHatX);
+        report[46] = PS4.getAnalogHat(RightHatX);
+      }
+      else {
+        tmp = avg_steer();
+        if (tmp < steer_min && tmp != 0) steer_min = tmp;
+        if (tmp > steer_max) steer_max = tmp;
+        tmp = ((double)((double)(tmp - steer_min) / (double)(steer_max - steer_min)) * 65535);
+
+        report[45] = tmp & 0xFF;
+        report[46] = tmp >> 8;
+      }
+
+      // report[43] = PS4.getAnalogHat(RightHatY);
+      report[3] = PS4.getAnalogHat(LeftHatX);
+      report[4] = PS4.getAnalogHat(LeftHatY);
+      report[5] = PS4.getAnalogHat(RightHatX);
+      report[6] = PS4.getAnalogHat(RightHatY);
+
+
+
+      tmp = avg_brake();
+      report[49] = tmp & 0xFF;
+      report[50] = tmp >> 8;
+
       // Gas
       // report[47] = 255 - PS4.getAnalogButton(R2);
       // report[48] = 255 - PS4.getAnalogButton(R2);
       // report[48] = 255;
+
+
+      tmp = pedal_scaled(pedal_period());
+      tmp = (tmp / 100.0) * 65535.0;
+
+      if (tmp > 65535) tmp = 65535.0;
+      else if(tmp < 0) tmp = 0.0;
+
+      pedal_int = 65535 - (uint16_t) tmp;
+      report[47] = pedal_int & 0xFF;
+      report[48] = pedal_int >> 8;
+
+
+      // switch (gear) {
+      //   case 0:
+      //     report[53] = 0x80;
+      //     break;
+
+      //   case 1:
+      //     report[53] = 0x81;
+      //     break;
+
+      //   case 2:
+      //     report[53] = 0x82;
+      //     break;
+
+      //   case 3:
+      //     report[53] = 0x84;
+      //     break;
+
+      //   case 4:
+      //     report[53] = 0x88;
+      //     break;
+
+      //   case 5:
+      //     report[53] = 0x90;
+      //     break;
+
+      //   case 6:
+      //     report[53] = 0xA0;
+      //     break;
+
+      //   case 7:
+      //     report[53] = 0xC0;
+      //     break;
+      // }
+
 
       // Brake
       // report[49] = 255 - PS4.getAnalogButton(L2);
@@ -663,17 +881,18 @@ void loop() {
   //   Serial.print(random_counter++);
   //   Serial.print("\n");
   // }
-  random_counter++;
-  Serial.print(pedal_scaled(pedal_period()));
-  Serial.print("\n");
-  if (random_counter % 400 == 0) {
-    Serial.print(pedal_scaled(MAX_PEDAL_PERIOD));
-    Serial.print("\n");
-    Serial.print(pedal_scaled(MIN_PEDAL_PERIOD));
-    Serial.print("\n");
-    // Serial.print(0);
-    // Serial.print("\n");
-  }
+  // random_counter++;
+  // Serial.print(pedal_scaled(pedal_period()));
+  // Serial.print("\n");
+  // if (random_counter % 400 == 0) {
+  //   Serial.print(pedal_scaled(MAX_PEDAL_PERIOD));
+  //   Serial.print("\n");
+  //   Serial.print(pedal_scaled(MIN_PEDAL_PERIOD));
+  //   Serial.print("\n");
+  //   // Serial.print(0);
+  //   // Serial.print("\n");
+  // }
+
 }
 // Interrupt is called once a millisecond,
 // ISR(TIMER1_OVF_vect)
